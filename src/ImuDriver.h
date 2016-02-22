@@ -1,5 +1,7 @@
 #include <stdint.h>
 #include <boost/thread.hpp>
+#include <string>
+
 
 struct ImuMeas_t{
 	double acc[3];
@@ -19,7 +21,7 @@ struct FlightControllerOut_t{
 
 class ImuDriver {
 public:
-	ImuDriver(const string& spiDevice, const string& gpioDevice, int fifoSize);
+	ImuDriver(const std::string& spiDevice, const std::string& gpioDevice, int fifoSize);
 	~ImuDriver(void);
 	void SetOutput(double x, double y, double yaw, double z);
 private:
@@ -39,23 +41,23 @@ private:
 	// Thread handing
 	//
 	//pthread_t thread;
-	mutable boost::mutex endThreadMutex;
-	bool threadsShouldExit;
+	mutable boost::mutex threadsShouldExitMutex;
+	bool threadsShouldExit = false;
 
 	//
 	// Output to flight controller
 	//
 	FlightControllerOut_t flightControllerOut;
-	mutable boost::mutex flightControllerOutMux;
+	mutable boost::mutex flightControllerOutMutex;
 
 	//
 	// Functions
 	//
 
 	// Clear SPI interrupt
-	char inline ClearSpiInt( void );
+	char inline ClearSpiInt(void);
 	// Interrupt handler
-	void GpioIntHandler( double timestamp );
+	void GpioIntHandler(long timestamp);
 	// Interrupt thread
 	void InterruptThread(void);
 	boost::thread* interruptThread;

@@ -1,10 +1,11 @@
 #include "ImuDriver.h"
 #include <linux/spi/spidev.h>
 #include <fcntl.h>
+#include <iostream>
 #include <poll.h>
-#include <ioctl>
 #include <cstring> // memcpy
-#include <boost/date_time/posix_time/posix_time.hpp>
+#include <boost/chrono.hpp>
+#include <sys/ioctl.h> // for SPI control
 
 #define MESSAGE_LENGTH  (20*2) // flight controller sends 16bit bytes
 
@@ -43,12 +44,11 @@ unpackFloats( uint8_t* from, float to[], uint32_t n ) {
 	}
 }
 
-Imu::Imu(const string& spiDevice, const string& gpioDevice)
+ImuDriver::ImuDriver(const std::string& spiDevice, const std::string& gpioDevice, int fifoSize)
 {
 	//
 	// Init variables
 	//
-	endThread = false;
 	mode = 0;
 	bits = 8;
 	speed = 6000000;
@@ -59,13 +59,13 @@ Imu::Imu(const string& spiDevice, const string& gpioDevice)
 	// open I/O files
 	//
 	// Open gpio file and check for error
-	gpioFd = open( gpioDevice, O_RDONLY | O_NONBLOCK );
+	gpioFd = open( gpioDevice.c_str(), O_RDONLY | O_NONBLOCK );
 	if ( gpioFd < 0 ) {
 		std::cerr << "gpio file open" << std::endl;
 	}
 
 	// Open spi file and check for error
-	spiFd = open( spiDevice, O_RDWR );
+	spiFd = open( spiDevice.c_str(), O_RDWR );
 	if ( spiFd < 0 ) {
 		std::cerr << "spi file open" << std::endl;
 	}
@@ -108,7 +108,7 @@ Imu::Imu(const string& spiDevice, const string& gpioDevice)
 	}
 
 	std::clog << "spi mode: 0x" << std::hex << mode << std::endl;
-	std::clog << "bits per word: " << std:dec << bits << std::endl;
+	std::clog << "bits per word: " << std::dec << bits << std::endl;
 	std::clog << "max speed: " << speed << "Hz (" << speed/1000 << " KHz)" << std::endl;
 
 	//
@@ -136,21 +136,21 @@ Imu::Imu(const string& spiDevice, const string& gpioDevice)
 	pthread_attr_destroy(&attr);*/
 }
 
-Imu::~Imu( ) {
+ImuDriver::~ImuDriver( ) {
 	std::clog << "Signaling to end imu thread and join" << std::endl;
 	boost::mutex::scoped_lock lock(threadsShouldExitMutex);
 	threadsShouldExit = true;
 	lock.unlock();
 
-	InterruptThread->join();
-	delete InterruptThread;
+	interruptThread->join();
+	delete interruptThread;
 	std::clog << "Thread joined" << std::endl;
 	close(gpioFd);
 	close(spiFd);
 }
 
 char inline
-Imu::clearSpiInt(void)
+ImuDriver::ClearSpiInt(void)
 {
 	// clear interrupt
 	char c;
@@ -160,7 +160,7 @@ Imu::clearSpiInt(void)
 }
 
 void
-Imu::InterruptThread(void) {
+ImuDriver::InterruptThread(void) {
 	std::clog << "Imu server: Started" << std::endl;
 	int rc; // return code
 
@@ -169,7 +169,7 @@ Imu::InterruptThread(void) {
 	fdset.fd = gpioFd;
 	fdset.events = POLLPRI;
 
-	clearSpiInt();
+	ClearSpiInt();
 
 	while( 1 ) {
 		boost::mutex::scoped_lock lock(threadsShouldExitMutex);
@@ -182,10 +182,10 @@ Imu::InterruptThread(void) {
 		// start waiting for next interrupt
 		rc = poll( &fdset, 1, timeout );
 		// clear interrupt, read status
-		char value = clearSpiInt();
+		char value = ClearSpiInt();
 		// Get time
-		boost::posix_time::ptime timeStampObj(boost::posix_time::microsec_clock::local_time());
-		long timeStamp = timeStampObj.total_microseconds();
+		long timeStamp = long( boost::chrono::duration_cast<boost::chrono::milliseconds>(
+			boost::chrono::process_real_cpu_clock::now().time_since_epoch() ).count() );
 
 		// Check if interrupt request failed
 		if (rc < 0) {
@@ -197,20 +197,20 @@ Imu::InterruptThread(void) {
 			// check if interrupt is high, if it is we previously missed a read/write so take it now
 			if ( value == '1' ) {
 				std::clog << "int timeout" << std::endl;
-				gpioIntHandler( timeStamp );
+				GpioIntHandler( timeStamp );
 				continue;
 			}
 		}
 
 		// Check if correct interrupt
 		if (fdset.revents & POLLPRI) {
-			gpioIntHandler( timeStamp );
+			GpioIntHandler( timeStamp );
 		}
 	}
 	std::clog << "Imu server: Ended" << std::endl;
 }
 
-void Imu::gpioIntHandler( long timeStamp ) {
+void ImuDriver::GpioIntHandler( long timeStamp ) {
 	int ret;
 	// Create buffer and struct for SPI IO
 	uint8_t tx[MESSAGE_LENGTH] = { 0 };
@@ -224,7 +224,7 @@ void Imu::gpioIntHandler( long timeStamp ) {
 		tr.bits_per_word = bits;
 
 	// Copy output to flightcontroller
-	boost::mutex::scoped_lock lock(flightControllerOutMtx);
+	boost::mutex::scoped_lock lock(flightControllerOutMutex);
 	std::memcpy( tx, &flightControllerOut, sizeof(flightControllerOut) );
 	lock.unlock();
 	repackUint8( tx, sizeof(flightControllerOut)/sizeof(float) );
@@ -254,13 +254,14 @@ void Imu::gpioIntHandler( long timeStamp ) {
 		element.alpha[i] = alpha[i];
 	}
 
-	sdt::cout << "got data: " << dist << std:endl;
 	//this->fifoPush( element );
 }
 
 
-void Imu::setOutput( float x, float y, float yaw, float z ) {
-	boost::mutex::scoped_lock lock(flightControllerOutMtx);
+void
+ImuDriver::SetOutput( double x, double y, double yaw, double z )
+{
+	boost::mutex::scoped_lock lock(flightControllerOutMutex);
 	flightControllerOut.x = x;
 	flightControllerOut.y = y;
 	flightControllerOut.yaw = yaw;
