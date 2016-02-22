@@ -253,6 +253,8 @@ void Imu::gpioIntHandler( long timeStamp ) {
 		element.gyro[i] = gyro[i];
 		element.alpha[i] = alpha[i];
 	}
+
+	sdt::cout << "got data: " << dist << std:endl;
 	//this->fifoPush( element );
 }
 
