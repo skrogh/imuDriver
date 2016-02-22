@@ -5,6 +5,7 @@
 #include <poll.h>
 #include <cstring> // memcpy
 #include <boost/chrono.hpp>
+#include <pthread.h>
 #include <sys/ioctl.h> // for SPI control
 
 #define MESSAGE_LENGTH  (20*2) // flight controller sends 16bit bytes
@@ -45,6 +46,8 @@ unpackFloats( uint8_t* from, float to[], uint32_t n ) {
 }
 
 ImuDriver::ImuDriver(const std::string& spiDevice, const std::string& gpioDevice, int fifoSize)
+:
+imuBuffer(fifoSize)
 {
 	//
 	// Init variables
@@ -114,26 +117,17 @@ ImuDriver::ImuDriver(const std::string& spiDevice, const std::string& gpioDevice
 	//
 	// start thread
 	//
-	interruptThread = new boost::thread(boost::bind(&ImuDriver::InterruptThread, this)); // Spawn thread running the interrupt waiter and handler
-
-	/* TODO: Set priority
-	pthread_attr_t attr;
-	pthread_attr_init(&attr);
-
 	struct sched_param param;
 	int policy = SCHED_FIFO;
 	param.sched_priority = sched_get_priority_max( policy );
 
-	pthread_attr_setinheritsched( &attr, PTHREAD_EXPLICIT_SCHED );
-	pthread_attr_setschedpolicy( &attr, policy );
-	pthread_attr_setschedparam( &attr, &param );
+	boost::thread::attributes attrs;
+	pthread_attr_setinheritsched( attrs.native_handle(), PTHREAD_EXPLICIT_SCHED );
+	pthread_attr_setschedpolicy( attrs.native_handle(), policy );
+	pthread_attr_setschedparam( attrs.native_handle(), &param );
 
-	ret = pthread_create( &thread, &attr, &Imu::imuThreadWrapper, this );
-	if (ret == -1) {
-		perror("Creating thread");
-	}
+	interruptThread = new boost::thread(attrs, boost::bind(&ImuDriver::InterruptThread, this)); // Spawn thread running the interrupt waiter and handler
 
-	pthread_attr_destroy(&attr);*/
 }
 
 ImuDriver::~ImuDriver( ) {
@@ -155,7 +149,7 @@ ImuDriver::ClearSpiInt(void)
 	// clear interrupt
 	char c;
 	lseek(gpioFd, 0, SEEK_SET);
-	read(gpioFd, &c, 1);
+	(void) read(gpioFd, &c, 1);
 	return c;
 }
 
@@ -184,8 +178,7 @@ ImuDriver::InterruptThread(void) {
 		// clear interrupt, read status
 		char value = ClearSpiInt();
 		// Get time
-		long timeStamp = long( boost::chrono::duration_cast<boost::chrono::milliseconds>(
-			boost::chrono::process_real_cpu_clock::now().time_since_epoch() ).count() );
+		std::chrono::high_resolution_clock::time_point timeStamp = std::chrono::high_resolution_clock::now();
 
 		// Check if interrupt request failed
 		if (rc < 0) {
@@ -210,7 +203,7 @@ ImuDriver::InterruptThread(void) {
 	std::clog << "Imu server: Ended" << std::endl;
 }
 
-void ImuDriver::GpioIntHandler( long timeStamp ) {
+void ImuDriver::GpioIntHandler( const std::chrono::high_resolution_clock::time_point& timeStamp ) {
 	int ret;
 	// Create buffer and struct for SPI IO
 	uint8_t tx[MESSAGE_LENGTH] = { 0 };
@@ -253,8 +246,7 @@ void ImuDriver::GpioIntHandler( long timeStamp ) {
 		element.gyro[i] = gyro[i];
 		element.alpha[i] = alpha[i];
 	}
-
-	//this->fifoPush( element );
+	imuBuffer.push(element);
 }
 
 
