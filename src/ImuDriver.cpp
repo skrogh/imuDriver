@@ -8,6 +8,9 @@
 #include <pthread.h>
 #include <sys/ioctl.h> // for SPI control
 
+#include <unistd.h>
+#include <sys/syscall.h>
+
 #define MESSAGE_LENGTH  (20*2) // flight controller sends 16bit bytes
 
 static inline uint32_t
@@ -155,7 +158,7 @@ ImuDriver::ClearSpiInt(void)
 
 void
 ImuDriver::InterruptThread(void) {
-	std::clog << "Imu server: Started" << std::endl;
+	std::clog << "Imu server: Started. PID: " << (int) syscall(SYS_gettid) << std::endl;
 	int rc; // return code
 
 	// Poll struct
