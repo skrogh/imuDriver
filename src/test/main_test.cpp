@@ -24,6 +24,16 @@ main( int argc, const char* argv[] )
 			<< imuData.gyro[2] << ",\t"
 			<< imuData.dist << ",\t"
 			<< imuData.distValid << ",\t"
+			<< imuData.steerX << ",\t"
+			<< imuData.steerY << ",\t"
+			<< imuData.steerYaw << ",\t"
+			<< imuData.steerThrust << ",\t"
+			<< imuData.voltage << ",\t"
+			<< imuData.current << ",\t"
+			<< imuData.u[0] << ",\t"
+			<< imuData.u[1] << ",\t"
+			<< imuData.u[2] << ",\t"
+			<< imuData.u[3] << ",\t"
 			<< std::chrono::duration_cast<std::chrono::nanoseconds>(imuData.timeStamp.time_since_epoch()).count() << ",\t"
 			<< std::chrono::duration_cast<std::chrono::nanoseconds>(imuData.timeStamp.time_since_epoch()).count() - startTime
 			<< std::endl;

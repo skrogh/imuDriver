@@ -10,6 +10,13 @@ struct ImuMeas_t{
 	double alpha[3];
 	double dist;
 	bool distValid;
+	double steerX;
+	double steerY;
+	double steerYaw;
+	double steerThrust;
+	double voltage;
+	double current;
+	double u[4];
 	std::chrono::high_resolution_clock::time_point timeStamp;
 };
 

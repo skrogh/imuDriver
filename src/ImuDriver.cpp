@@ -6,17 +6,24 @@
 #include <cstring> // memcpy
 #include <boost/chrono.hpp>
 #include <pthread.h>
+#include <sched.h>
 #include <sys/ioctl.h> // for SPI control
 
 #include <unistd.h>
 #include <sys/syscall.h>
 
-#define MESSAGE_LENGTH  (20*2) // flight controller sends 16bit bytes
+#define MESSAGE_LENGTH  (36*2) // flight controller sends 16bit bytes
 
 static inline uint32_t
 unpackUint32(uint8_t* from)
 {
 	return (from[3] << 0) | (from[2] << 8) | (from[1] << 16) | (from[0] << 24);
+}
+
+static inline uint16_t
+unpackUint16(uint8_t* from)
+{
+	return (from[1] << 0) | (from[0] << 8);
 }
 
 static inline void
@@ -123,11 +130,15 @@ imuBuffer(fifoSize)
 	struct sched_param param;
 	int policy = SCHED_FIFO;
 	param.sched_priority = sched_get_priority_max( policy );
+	cpu_set_t cpuset;
+	CPU_ZERO(&cpuset);
+	CPU_SET(0, &cpuset);
 
 	boost::thread::attributes attrs;
 	pthread_attr_setinheritsched( attrs.native_handle(), PTHREAD_EXPLICIT_SCHED );
 	pthread_attr_setschedpolicy( attrs.native_handle(), policy );
 	pthread_attr_setschedparam( attrs.native_handle(), &param );
+	pthread_attr_getaffinity_np( attrs.native_handle(), sizeof(cpu_set_t), &cpuset);
 
 	interruptThread = new boost::thread(attrs, boost::bind(&ImuDriver::InterruptThread, this)); // Spawn thread running the interrupt waiter and handler
 
@@ -239,6 +250,17 @@ void ImuDriver::GpioIntHandler( const std::chrono::high_resolution_clock::time_p
 	unpackFloats( &rx[sizeof(acc)+sizeof(gyro)], alpha, 3 );
 	uint32_t ping = unpackUint32( &rx[sizeof(acc)+sizeof(gyro)+sizeof(alpha)] );
 	double dist = ping * ( 340.29 / 80000000.0 ) / 2.0;
+	float steerX = unpackFloat( rx + sizeof(acc) + sizeof(gyro) + sizeof(alpha) + sizeof(ping) );
+	float steerY = unpackFloat( rx + sizeof(acc) + sizeof(gyro) + sizeof(alpha) + sizeof(ping) + sizeof(steerX) );
+	float steerYaw = unpackFloat( rx + sizeof(acc) + sizeof(gyro) + sizeof(alpha) + sizeof(ping) + sizeof(steerX)*2 );
+	float steerThrust = unpackFloat( rx + sizeof(acc) + sizeof(gyro) + sizeof(alpha) + sizeof(ping) + sizeof(steerX)*3 );
+	float voltage = unpackFloat( rx + sizeof(acc) + sizeof(gyro) + sizeof(alpha) + sizeof(ping) + sizeof(steerX)*4 );
+	float current = unpackFloat( rx + sizeof(acc) + sizeof(gyro) + sizeof(alpha) + sizeof(ping) + sizeof(steerX)*5 );
+	uint16_t u[4];
+	u[0] = unpackUint16( rx + sizeof(acc) + sizeof(gyro) + sizeof(alpha) + sizeof(ping) + sizeof(steerX)*6 );
+	u[1] = unpackUint16( rx + sizeof(acc) + sizeof(gyro) + sizeof(alpha) + sizeof(ping) + sizeof(steerX)*6 + sizeof(u[0]) );
+	u[2] = unpackUint16( rx + sizeof(acc) + sizeof(gyro) + sizeof(alpha) + sizeof(ping) + sizeof(steerX)*6 + sizeof(u[0])*2 );
+	u[3] = unpackUint16( rx + sizeof(acc) + sizeof(gyro) + sizeof(alpha) + sizeof(ping) + sizeof(steerX)*6 + sizeof(u[0])*3 );
 
 	ImuMeas_t element;
 	element.timeStamp = timeStamp;
@@ -249,6 +271,17 @@ void ImuDriver::GpioIntHandler( const std::chrono::high_resolution_clock::time_p
 		element.gyro[i] = gyro[i];
 		element.alpha[i] = alpha[i];
 	}
+	element.steerX = steerX;
+	element.steerY = steerY;
+	element.steerYaw = steerYaw;
+	element.steerThrust = steerThrust;
+	element.voltage = voltage;
+	element.current = current;
+	for ( int i = 0; i<4; i++ )
+	{
+		element.u[i] = u[i]/10000.0f;
+	}
+
 	imuBuffer.push(element);
 }
 
